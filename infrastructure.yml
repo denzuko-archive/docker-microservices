@@ -1,0 +1,102 @@
+---
+--- docker-compose -f $0 up
+---
+registrator:
+    image: gliderlabs/registrator:latest
+    volumes:
+        - /var/run/docker.sock:/tmp/docker.sock
+        - /dev/log:/dev/log
+    net: "host"
+    environment:
+        SERVICE_TAGS: infrastructure,consul
+        SERVICE_NAME: registrator
+        CONSUL_MASTER: consul-master.service.consul
+        CONSUL_PORT: 8500
+    command: consul://$CONSUL_MASTER:$CONSUL_PORT
+    restart: always
+    links:
+        - consul
+
+consul_master:
+    command: -server -bootstrap
+    image: gliderlabs/consul:latest
+    restart: always
+    environment:
+      SERVICE_TAGS: infrastucture,consul
+      SERVICE_NAME: consul-slave
+    volumes:
+        - /var/run/docker.sock:/tmp/docker.sock
+        - /dev/log:/dev/log
+        - /etc/consul.d:/config
+    ports:
+        - "8400:8400"
+        - "8500:8500"
+        - "8600:53/udp"
+        - "53:53/udp"
+
+consul_slave:
+    command: -client
+    image: gliderlabs/consul:latest
+    volumes:
+        - /var/run/docker.sock:/tmp/docker.sock
+        - /dev/log:/dev/log
+        - /etc/consul.d:/config
+    environment:
+      SERVICE_TAGS: infrastucture,consul
+      SERVICE_NAME: consul-slave
+    ports:
+        - "8400:8400"
+        - "8500:8500"
+        - "8600:53/udp"
+        - "53:53/udp"
+
+consul_template:
+    image: asteris/consul-template
+    volumes:
+        - /etc/consul-template.d/:/consul-template.d/config.d
+
+swarm_master:
+    extends:
+        file: common.yml
+        service: consul_environment
+    image: swarm
+    environment:
+        SERVICE_TAGS: infrastructure,consul,swarm
+        SERVICE_NAME: registrator
+        CONSUL_MASTER: consul-master.service.consul
+        CONSUL_PORT: 8500
+        SWARM_HOST: ":2375"
+    command: manage consul://$CONSUL_MASTER:$CONSUL_PORT/swarm
+    net: "host"
+    expose:
+        - "2376:2375"
+    ports:
+        - "2376:2375"
+    restart: always
+
+swarm_agent:
+    image: swarm
+    environment:
+        SERVICE_TAGS: infrastructure,consul,swarm
+        SERVICE_NAME: swarm-agent
+        CONSUL_MASTER: consul.service.consul
+        CONSUL_PORT: 8500
+        SWARM_HOST: ":2375"
+        DOCKER_PORT: 2375
+        SWARM_MASTER: swarm-master.service.consul
+    command: 'join --advertise=$SWARM_MASTER:$DOCKER_PORT consul://$CONSUL_MASTER:$CONSUL_PORT/swarm'
+    net: "host"
+    expose:
+        - "2376:2375"
+    ports:
+        - "2376:2375"
+    restart: always
+
+vault:
+    image: novilabs/vault:consul
+    ports:
+        - "8200:8200"
+    cap_add:
+        - IPC_LOCK
+    environment:
+        CONSUL_HOST_ADDR: consul-master.service.consul:8500
